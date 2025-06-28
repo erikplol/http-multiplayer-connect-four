@@ -265,6 +265,9 @@ class GameClient:
         poll_interval_ms = 200  # 200ms
         cursor_timer = 0
         cursor_visible = True
+        # --- Add lobby polling timer and cache ---
+        last_lobby_poll = 0
+        cached_lobby = None
         while True:
             mouse_pos = pygame.mouse.get_pos()
             dt = clock.tick(60)
@@ -323,16 +326,21 @@ class GameClient:
                     btn_ready = self.draw_lobby()
                     if event.type == pygame.MOUSEBUTTONDOWN and btn_ready.collidepoint(event.pos) and self.http:
                         self.http.set_ready()
-                        
-                    if self.http:
-                        lobby = self.http.lobby_status()
-                        self.lobby_players = lobby.get('players', [])
-                        self.lobby_ready_status = lobby.get('ready', {})
-                        if len(self.lobby_players) == 2 and all(self.lobby_ready_status.values()):
-                            self.my_idx = self.lobby_players.index(self.player_name)
-                            self.state = STATE_GAME
-                            self.connect4.reset()
-                            
+                        cached_lobby = None  # force refresh after ready
+                    # Poll lobby status only every poll_interval_ms
+                    now = pygame.time.get_ticks()
+                    if self.http and (cached_lobby is None or now - last_lobby_poll > poll_interval_ms):
+                        cached_lobby = self.http.lobby_status()
+                        last_lobby_poll = now
+                    lobby = cached_lobby or {'players': [], 'ready': {}}
+                    self.lobby_players = lobby.get('players', [])
+                    self.lobby_ready_status = lobby.get('ready', {})
+                    if len(self.lobby_players) == 2 and all(self.lobby_ready_status.values()):
+                        self.my_idx = self.lobby_players.index(self.player_name)
+                        self.state = STATE_GAME
+                        self.connect4.reset()
+                        cached_game_state = None
+                        cached_lobby = None
                 elif self.state == STATE_GAME:
                     # Update hover column (always, for smooth UI)
                     grid_left = (WIDTH - 7*80) // 2
