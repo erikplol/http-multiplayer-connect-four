@@ -1,4 +1,3 @@
-# Dockerfile for Connect Four Game Server + Redis
 FROM python:3.12-slim
 
 # Install system dependencies
@@ -16,8 +15,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy server code
 COPY server/ ./server/
 
-# Expose ports (game server default 5001, redis 6379)
-EXPOSE 5001 6379
+# Expose ports (game server default 5001, 5002, redis 6379)
+EXPOSE 5001 5002 6379
 
 # Start both Redis and game server using supervisord
 RUN pip install supervisor

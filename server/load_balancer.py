@@ -2,7 +2,7 @@ import http.server
 import socketserver
 import threading
 import requests
-import urllib.parse
+import argparse
 
 GAME_SERVERS = [5001, 5002]
 server_index = 0
@@ -60,7 +60,6 @@ class LoadBalancerHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(b'{"error": "Game server unavailable"}')
 
 if __name__ == '__main__':
-    import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('--port', type=int, default=5000)
     args = parser.parse_args()

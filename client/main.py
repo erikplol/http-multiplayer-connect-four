@@ -70,18 +70,26 @@ class GameClient:
         SCREEN.blit(text_surf, (text_x, text_y))
         return btn_rect
 
-    def draw_input_field(self, x, y, w, h, text, active=False):
-        """Draw an input field with focus states"""
+    def draw_input_field(self, x, y, w, h, text, active=False, cursor_visible=True):
+        """Draw an input field with focus states and optional blinking cursor"""
         field_color = COLORS['primary'] if active else COLORS['card']
         field_rect = pygame.Rect(x, y, w, h)
         pygame.draw.rect(SCREEN, field_color, field_rect, border_radius=6)
         pygame.draw.rect(SCREEN, COLORS['text'], field_rect, width=2, border_radius=6)
-        
+        # Draw text
         text_surf = SMALL_FONT.render(text, True, COLORS['text'])
-        SCREEN.blit(text_surf, (x + 12, y + (h - text_surf.get_height()) // 2))
+        text_x = x + 12
+        text_y = y + (h - text_surf.get_height()) // 2
+        SCREEN.blit(text_surf, (text_x, text_y))
+        # Draw blinking cursor if active
+        if active and cursor_visible:
+            cursor_x = text_x + text_surf.get_width() + 2
+            cursor_y = text_y
+            cursor_h = text_surf.get_height()
+            pygame.draw.rect(SCREEN, COLORS['text'], (cursor_x, cursor_y, 2, cursor_h))
         return field_rect
 
-    def draw_menu(self):
+    def draw_menu(self, input_active=False, code_input_active=False, cursor_visible=True):
         SCREEN.fill(COLORS['bg'])
         
         # Title with glow effect
@@ -99,12 +107,12 @@ class GameClient:
         # Name input
         name_label = SMALL_FONT.render('Player Name:', True, COLORS['text'])
         SCREEN.blit(name_label, (card_x + 30, card_y + 40))
-        name_box = self.draw_input_field(card_x + 30, card_y + 70, card_w - 60, 40, self.player_name)
+        name_box = self.draw_input_field(card_x + 30, card_y + 70, card_w - 60, 40, self.player_name, active=input_active, cursor_visible=cursor_visible)
         
         # Room code input
         room_label = SMALL_FONT.render('Room Code (optional):', True, COLORS['text'])
         SCREEN.blit(room_label, (card_x + 30, card_y + 140))
-        code_box = self.draw_input_field(card_x + 30, card_y + 170, card_w - 60, 40, self.room_id)
+        code_box = self.draw_input_field(card_x + 30, card_y + 170, card_w - 60, 40, self.room_id, active=code_input_active, cursor_visible=cursor_visible)
         
         # Buttons
         mouse_pos = pygame.mouse.get_pos()
@@ -252,34 +260,44 @@ class GameClient:
     def run(self):
         clock = pygame.time.Clock()
         input_active = code_input_active = False
-        
+        last_game_state_poll = 0
+        cached_game_state = None
+        poll_interval_ms = 200  # 200ms
+        cursor_timer = 0
+        cursor_visible = True
         while True:
             mouse_pos = pygame.mouse.get_pos()
-            
+            dt = clock.tick(60)
+            cursor_timer += dt
+            if cursor_timer > 500:
+                cursor_visible = not cursor_visible
+                cursor_timer = 0
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     pygame.quit()
                     sys.exit()
-                    
                 if self.state == STATE_MENU:
-                    name_box, btn_create, btn_quick, btn_join, code_box = self.draw_menu()
-                    
+                    name_box, btn_create, btn_quick, btn_join, code_box = self.draw_menu(input_active, code_input_active, cursor_visible)
                     if event.type == pygame.MOUSEBUTTONDOWN:
                         input_active = name_box.collidepoint(event.pos)
                         code_input_active = code_box.collidepoint(event.pos)
-                        
+                        if not (input_active or code_input_active):
+                            input_active = code_input_active = False
+                        # --- Create Room ---
                         if btn_create.collidepoint(event.pos) and self.player_name:
                             self.menu_notification = ""
                             self.http = HTTPClient(self.player_name)
                             data = self.http.create_room()
                             self.room_id = data['room_id']
                             self.state = STATE_LOBBY
+                        # --- Quick Join ---
                         elif btn_quick.collidepoint(event.pos) and self.player_name:
                             self.menu_notification = ""
                             self.http = HTTPClient(self.player_name)
                             data = self.http.quick_join()
                             self.room_id = data['room_id']
                             self.state = STATE_LOBBY
+                        # --- Join with Code ---
                         elif btn_join.collidepoint(event.pos) and self.player_name and self.room_id:
                             self.menu_notification = ""
                             self.http = HTTPClient(self.player_name)
@@ -301,7 +319,6 @@ class GameClient:
                                 self.room_id = self.room_id[:-1]
                             elif len(self.room_id) < 16 and event.unicode.isprintable():
                                 self.room_id += event.unicode
-                                
                 elif self.state == STATE_LOBBY:
                     btn_ready = self.draw_lobby()
                     if event.type == pygame.MOUSEBUTTONDOWN and btn_ready.collidepoint(event.pos) and self.http:
@@ -317,27 +334,30 @@ class GameClient:
                             self.connect4.reset()
                             
                 elif self.state == STATE_GAME:
-                    if self.http:
-                        state = self.http.game_state()
-                        board = state.get('board', [[0]*7 for _ in range(6)])
-                        turn = state.get('turn', 0)
-                        winner = state.get('winner', None)
-                        my_turn = (turn == self.my_idx)
-                        
-                        # Update hover column
-                        grid_left = (WIDTH - 7*80) // 2
-                        if grid_left <= mouse_pos[0] < grid_left + 7*80:
-                            self.hover_col = (mouse_pos[0] - grid_left) // 80
-                        else:
-                            self.hover_col = -1
-                            
-                        self.draw_game(board, turn, my_turn, self.lobby_players)
-                        
-                        if winner:
-                            self.state = STATE_WIN if winner == self.player_name else STATE_LOSE
-                        elif event.type == pygame.MOUSEBUTTONDOWN and my_turn and 0 <= self.hover_col < 7:
+                    # Update hover column (always, for smooth UI)
+                    grid_left = (WIDTH - 7*80) // 2
+                    if grid_left <= mouse_pos[0] < grid_left + 7*80:
+                        self.hover_col = (mouse_pos[0] - grid_left) // 80
+                    else:
+                        self.hover_col = -1
+                    # Poll game state only every poll_interval_ms
+                    now = pygame.time.get_ticks()
+                    if self.http and (cached_game_state is None or now - last_game_state_poll > poll_interval_ms):
+                        cached_game_state = self.http.game_state()
+                        last_game_state_poll = now
+                    state = cached_game_state or {'board': [[0]*7 for _ in range(6)], 'turn': 0, 'winner': None}
+                    board = state.get('board', [[0]*7 for _ in range(6)])
+                    turn = state.get('turn', 0)
+                    winner = state.get('winner', None)
+                    my_turn = (turn == self.my_idx)
+                    self.draw_game(board, turn, my_turn, self.lobby_players)
+                    if winner:
+                        self.state = STATE_WIN if winner == self.player_name else STATE_LOSE
+                        cached_game_state = None
+                    elif event.type == pygame.MOUSEBUTTONDOWN and my_turn and 0 <= self.hover_col < 7:
+                        if self.http is not None:
                             self.http.make_move(self.hover_col)
-                            
+                            cached_game_state = None  # force refresh after move
                 elif self.state in [STATE_WIN, STATE_LOSE]:
                     btn_menu = self.draw_end_screen(self.state == STATE_WIN)
                     if event.type == pygame.MOUSEBUTTONDOWN and btn_menu.collidepoint(event.pos):
