@@ -1,7 +1,4 @@
-from socket import *
 import socket
-import time
-import sys
 import logging
 import argparse
 from concurrent.futures import ThreadPoolExecutor
